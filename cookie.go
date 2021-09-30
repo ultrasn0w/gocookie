@@ -4,27 +4,51 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/gookit/color"
 )
 
 func main() {
-	retChan := make(chan string)
+	// stay alive
+	sc := make(chan os.Signal, 1)
+	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
+
 	color.Notice.Println("gocookie 1.0")
 	color.Notice.Println(runtime.Version())
+	color.Notice.Printf("Running on %d threads\n", runtime.NumCPU())
 
 	// main logic
-	x, y := getXY(retChan)
-	println(x + y)
+	x, y := getXY()
+	color.Infof("X: %s Y: %s\n", x, y)
+	go checkPos(x, y)
+	// Spawn thread for every CPU
+	for i := 0; i < runtime.NumCPU()-1; i++ {
+		color.Infof("Launch click thread %d\n", i)
+		go runClick()
+	}
+
+	<-sc
+	os.Exit(0)
 }
 
-func getXY(retChan chan string) (x string, y string) {
-	go runCmdOutput(retChan, "xdotool", "getmouselocation")
-	posOut := strings.TrimSpace(<-retChan)
-	println(posOut)
-	splt := strings.Split(posOut, " ")
+func checkPos(startx, starty string) {
+	x, y := startx, starty
+	for range time.Tick(time.Second) {
+		x, y = getXY()
+		if startx != x || starty != y {
+			color.Infoln("Mouse moved")
+			os.Exit(0)
+		}
+	}
+}
+
+func getXY() (x string, y string) {
+	splt := strings.Split(strings.TrimSpace(runCursorPos()), " ")
 	if len(splt) == 1 {
 		os.Exit(1)
 	}
@@ -51,20 +75,18 @@ func getXY(retChan chan string) (x string, y string) {
 	return x, y
 }
 
-func runCmdOutput(retChan chan<- string, cmds string, args ...string) {
-	cmd := exec.Command(cmds, args...)
+func runCursorPos() string {
+	cmd := exec.Command("xdotool", "getmouselocation")
 	out, err := cmd.CombinedOutput()
 	if err != nil && cmd.ProcessState.ExitCode() != 1 {
-		retChan <- fmt.Sprintln(color.Error.Sprint(err))
-		return
+		return fmt.Sprintln(color.Error.Sprint(err))
 	}
-	retChan <- string(out)
+	return string(out)
 }
 
-func runCmd(cmds string, args ...string) {
-	cmd := exec.Command(cmds, args...)
-	err := cmd.Run()
-	if err != nil && cmd.ProcessState.ExitCode() != 1 {
-		color.Errorln(err.Error())
+func runClick() {
+	for range time.Tick(time.Millisecond) {
+		cmd := exec.Command("xdotool", "click", "1")
+		cmd.Run()
 	}
 }
